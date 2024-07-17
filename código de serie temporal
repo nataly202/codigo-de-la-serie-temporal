@@ -1,0 +1,151 @@
+# Nueva data de Peces y Peces con los datos procesado y limpios para analizarlos
+
+df2 <- read_excel("df2.xlsx")
+
+# Extraer año y mes
+df2 <- df2 %>%
+  mutate(mes_anio = floor_date(fact_fecha , "month"))
+
+# Contar eventos por mes
+conteo_mensual1 <- df2 %>%
+  group_by(mes_anio) %>%
+  summarise(conteo = n())
+
+# Verificar el rango de fechas
+min_fecha1 <- min(conteo_mensual1$mes_anio)
+max_fecha1 <- max(conteo_mensual1$mes_anio)
+print(min_fecha1)
+print(max_fecha1)
+
+
+# Extraer año y mes de inicio
+start_year1 <- year(min_fecha1)
+start_month1 <- month(min_fecha1)
+
+# Crear la serie temporal con los conteos mensuales
+df.ts1 <- ts(conteo_mensual1$conteo, start = c(start_year1, start_month1), frequency = 12)
+
+# Diagrama de cajas sin datos atípicos
+boxplot(df.ts1, main= "VENTAS DE ESPECIES DE PECES EN MANTA-ECUADOR",
+        horizontal = TRUE,col= "steelblue1")
+
+# Histograma sin datos atípicos
+hist(df.ts1,freq = FALSE,main = "HISTOGRAMA DE VENTAS EN PECES & PECES",col= "steelblue1",
+     xlab = "Ventas",ylab = "Frecuencia")
+lines(density(df.ts1),col="red")
+# Identificación de datos atípicos
+datip1 <- boxplot.stats(x = df.ts1)
+#Sin atipicos aqui
+
+# Serie temporal sin presencia de datos atípicos
+plot(df.ts1, main= "Ventas en Peces & Peces de Manta", xlab =
+       "Anios",
+     ylab= "Ventas mensuales", col= "steelblue1")
+tendencia<- lm(df.ts1~time(df.ts1))
+abline(tendencia,col="red")
+
+# Descomposición de la serie
+desc<-decompose(df.ts1, type = "additive")
+plot(desc, col= "steelblue1")
+
+# IDENTIFICACIÓN DEL MODELO
+# Test de estacionariedad
+adf.test(df.ts1)
+
+#Se obtuvo un p-valor de 0.01 menor al nivel de significancia 0.05, por lo que existe suficiente
+#evidencia para  rechazar la hipótesis nula, con esto se entiende que la serie no posee raíz unitaria
+#por ende es  estacionaria. 
+
+# Correlograma parte regular
+acf(df.ts1,main="Autocorrelación Simple",col="steelblue1")
+pacf(df.ts1,main="Autocorrelación Parcial",col="steelblue1")
+
+# ESTIMACIÓN DE LOS PARÁMETROS
+# Modelo de auto.arima
+m1 <- auto.arima(df.ts1, stepwise = T, approximation = T,trace = T)
+summary(m1)
+
+# Modelos candidatos
+auto_arima<- arima(df.ts1,order = c(0,0,1),seasonal=list(order=c(2,0,0),period=12))
+
+BIC(auto_arima)
+#### AJUSTAR MODELO MEJORADO ------------
+
+# Dividir datos en entrenamiento y prueba
+train1 <- window(df.ts1, end=c(2023,12))
+test1 <- window(df.ts1, start=c(2024,1))
+
+
+# Evaluar el segundo modelo
+best_fit_train <- arima(train1, order=c(0,0,1), seasonal=list(order=c(1,0,1), period=12), include.mean=TRUE)
+forecast_best_fit <- forecast(best_fit_train, h=48)
+BIC(best_fit_train)
+# Comparar las predicciones con los datos reales
+accuracy_best <- accuracy(forecast_best_fit, test1)
+print(accuracy_best)
+
+# Visualizar los resultados
+plot(forecast_best_fit, main="Predicciones del segundo modelo SARIMA")
+lines(test, col='red')
+# Ajustar el modelo ETS (equivalente a Holt-Winters aditivo)
+
+df.ts2<-log(df.ts1)
+train1 <- window(df.ts2, end=c(2022,1))
+#train1 <- window(df.ts2, end=c(2023,1))
+train1 <- window(df.ts1, end=c(2023,1))
+test1 <- window(df.ts1, start=c(2017,5))
+
+train1 <- window(df.ts2, end=c(2022,1))
+test1 <- window(df.ts2, start=c(2023,12))
+
+ets_model <- ets(train1 , model = "AAA")
+
+
+###Mejor modelo para realizar predicciones
+
+# DIAGNÓSTICO Y VALIDACIÓN DEL MODELO-----------------------------------------
+checkresiduals(ets_model)
+
+# Verificación de supuestos
+# Ruido Blanco
+Box.test(residuals(ets_model), type = "Ljung-Box")
+
+#Con un p-valor de 0.11 obtenido es mayor
+#al nivel de significancia de 0.05, no se rechaza la hipótesis nula, es decir el modelo estimado se ajusta
+#de manera correcta a los datos y tiene ruido blanco, con esto se corrobora que los
+#residuos del error siguen una distribución con media cero y varianza contante 
+
+error <- residuals(ets_model)
+plot(error, col="red")
+
+# Normalidad
+jarque.bera.test(residuals(ets_model))
+shapiro.test(residuals(ets_model))
+#Con un p valor de  0.35 mayor que  0.05 existe evidencia estadistica 
+#suficiente para decir que los residuos del modelo estimado siguen normalidad
+
+# Homocedasticidad
+
+white.test(residuals(ets_model))
+
+#Con un p valor de  0.74 mayor que  0.05 existe evidencia estadistica 
+#suficiente para decir que los residuos del modelo estimado tiene varianza constante
+
+# Independencia
+Box.test(residuals(ets_model),type = "Ljung-Box")
+
+#Con un p valor de  0.115 mayor que  0.05 existe evidencia estadistica 
+#suficiente para decir que los residuos del modelo estimado son independientes
+
+# PRONÓSTICO DEL MODELO---------------------------------------
+pronost <- forecast(ets_model ,h=48,level = 0.95)
+
+autoplot(pronost, main = "Pronóstico de ventas desde febrero 2024- enero 2026 ",
+         xlab= "Año",ylab= "Número de ventas")
+
+excel_file <- "pronost.xlsx"
+
+# Exportar las predicciones a Excel
+write.xlsx(pronost, excel_file, rowNames = FALSE)
+
+
